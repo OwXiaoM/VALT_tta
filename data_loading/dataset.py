@@ -216,6 +216,117 @@ class Data(Dataset):
             
         return coords, values
 
+    # def load_coords_and_values(self, modalities, normalize=True):
+    #     import scipy.ndimage as ndi # 确保引入了这个库
+
+    #     # 1. 加载数据
+    #     modalities_data = self.augment_modalities(modalities)
+    #     mra_data = modalities_data[self.modality_keys[0]]
+    #     seg_data = modalities_data[self.modality_keys[-1]]
+    #     affine = modalities[self.modality_keys[-1]].affine
+    #     img_shape = mra_data.shape
+
+    #     # 强制清洗背景 (保险起见)
+    #     mra_data[seg_data == 0] = 0.0
+
+    #     # ==============================================================
+    #     # [Step 1] 核心：获取血管点 (Positive Samples)
+    #     # ==============================================================
+    #     vessel_mask = (seg_data > 0)
+    #     vessel_indices = np.argwhere(vessel_mask)
+    #     n_vessel = len(vessel_indices)
+
+    #     # ==============================================================
+    #     # [Step 2] 关键改进：生成边界区域 (Hard Negative Mining)
+    #     # ==============================================================
+    #     # 逻辑：对血管 Mask 进行膨胀，然后减去原本的血管 Mask
+    #     # 剩下的就是紧贴着血管的那一圈“壳” (Shell)
+        
+    #     # iterations=2 表示向外扩张约 2 个像素，你可以根据需要调整(1-3均可)
+    #     dilated_mask = ndi.binary_dilation(vessel_mask, iterations=2)
+        
+    #     # 边界 = 膨胀后 有值 且 原本 无值 的地方
+    #     boundary_mask = dilated_mask & (~vessel_mask)
+    #     boundary_indices = np.argwhere(boundary_mask)
+    #     n_boundary = len(boundary_indices)
+
+    #     # ==============================================================
+    #     # [Step 3] 制定采样配额 (4:4:2 策略)
+    #     # ==============================================================
+    #     # 我们希望重点攻克边界，所以让边界点的数量接近血管点的数量
+        
+    #     target_n_boundary = int(n_vessel * 1.0) # 1:1 强攻边界
+    #     target_n_global   = int(n_vessel * 0.5) # 0.5 远场防幻觉
+        
+    #     # --- A. 采样边界点 ---
+    #     if n_boundary > 0:
+    #         if n_boundary >= target_n_boundary:
+    #             # 边界点通常很多，随机选一部分
+    #             idx = np.random.choice(n_boundary, target_n_boundary, replace=False)
+    #             selected_boundary = boundary_indices[idx]
+    #         else:
+    #             # 如果血管极细，边界点不够，就全都要
+    #             selected_boundary = boundary_indices
+    #     else:
+    #         selected_boundary = np.empty((0, 3), dtype=int)
+
+    #     # --- B. 采样远场背景 (Global) ---
+    #     # 随机撒点，只要不是血管也不是边界
+    #     n_candidates = int(target_n_global * 3) + 10000
+    #     rand_coords = np.random.randint(0, [img_shape[0], img_shape[1], img_shape[2]], 
+    #                                     size=(n_candidates, 3))
+        
+    #     # 筛选：既不是血管(dilated_mask包含了血管和边界)的点
+    #     # 也就是在 dilated_mask 之外的点
+    #     vals_dilated = dilated_mask[rand_coords[:,0], rand_coords[:,1], rand_coords[:,2]]
+    #     is_global_bg = (vals_dilated == 0)
+    #     selected_global = rand_coords[is_global_bg]
+
+    #     if len(selected_global) > target_n_global:
+    #         selected_global = selected_global[:target_n_global]
+
+    #     # ==============================================================
+    #     # [Step 4] 三路合并
+    #     # ==============================================================
+    #     parts = [vessel_indices]
+    #     if len(selected_boundary) > 0:
+    #         parts.append(selected_boundary)
+    #     if len(selected_global) > 0:
+    #         parts.append(selected_global)
+            
+    #     c_nz = np.vstack(parts)
+            
+    #     # ==============================================================
+    #     # [Step 5] 内存复制 (加速 IO) - 保持不变
+    #     # ==============================================================
+    #     target_total_points = 5000000 
+    #     current_points = len(c_nz)
+        
+    #     if current_points < target_total_points and current_points > 0:
+    #         repeat_factor = target_total_points // current_points + 1
+    #         c_nz = np.tile(c_nz, (repeat_factor, 1))
+    #         c_nz = c_nz[:target_total_points]
+        
+    #     np.random.shuffle(c_nz)
+
+    #     # ==============================================================
+    #     # [Step 6] 提取值 (保持不变)
+    #     # ==============================================================
+    #     values = np.stack([modalities_data[mod][c_nz[:, 0], c_nz[:, 1], c_nz[:, 2]].flatten() 
+    #                         for mod in self.modality_keys], axis=-1)
+        
+    #     c_nz_phys = nib.affines.apply_affine(affine, c_nz)
+    #     img_center_index = np.array(img_shape) / 2.0
+    #     geometric_center = nib.affines.apply_affine(affine, img_center_index)
+        
+    #     coords = c_nz_phys - geometric_center
+        
+    #     if normalize:
+    #         wb_center = self.world_bbox / 2
+    #         coords = (coords / wb_center) 
+    #         values = normalize_intensities(values, self.args['dataset']['normalize_values'])
+            
+    #     return coords, values
 
     def augment_modalities(self, modalities):
         if self.data_augmentation:

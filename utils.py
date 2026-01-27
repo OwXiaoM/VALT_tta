@@ -296,7 +296,11 @@ def save_atlas(args, atlas, affine, temp_steps, condition_vectors, epoch):
         affine = affine.detach().cpu().numpy()
     mod_labels = args['dataset']['modalities']
     if args['save_certainty_maps']:
-        seg_labels = [f"CertaintyMaps/{label}" for label in args['dataset']['label_names']]
+        seg_labels = [
+            f"CertaintyMaps/{label}" 
+            for label in args['dataset']['label_names'] 
+            if label.lower() not in ['Background'] # 过滤掉常见的背景名
+        ]
         mod_labels = mod_labels + seg_labels
     for c in range(n_conds):
         for i in range(len(mod_labels)):

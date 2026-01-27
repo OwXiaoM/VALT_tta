@@ -88,9 +88,9 @@ atlas_gen:
   spacing: [1, 1, 1]
   temporal_values: [20, 30, 40, 50, 60, 70, 80, 90] # steps in the temporal dimension (scan age_min, scan age_max)
   conditions: # conditions to use for the atlas generation (must be specified and activated in config_data.yaml)
-    sex:
-      values: [0, 1] 
-      normed_values: False
+    # sex:
+    #   values: [0, 1] 
+    #   normed_values: False
     
   # --- Mean Latent Regression ---
   gaussian_span: 5.0 # in weeks. +/- weeks of scan age to cover 95% of the weights, 
@@ -103,7 +103,7 @@ atlas_gen:
 # --------- Latent Space Analysis ---------
 latent_anaylsis: # to predict scan_age from latentcode or explciit conditions during test-time
   activate: False
-  predict_scan_age: NCA #NCA, none for no prediction
+  predict_scan_age: 'none' #NCA, none for no prediction
   predict_birth_age: 'none' #NCA, none for no prediction, used for implicit birth-age prediction from latent code for ablation study.
   predict_ext_condition: 'none' #'MAE'  # predict a condition for test-time subjects, MAE for birth-age, binary crossentropy for sex, none for no prediction
   ba_regression:
