@@ -331,10 +331,16 @@ class AtlasBuilder:
         
         if args_LA['predict_scan_age'] != 'none':
             self.predict_cond_value(epoch, epoch_val, cond_key='scan_age')
-        if args_LA['predict_birth_age'] != 'none':
+        
+        # [Fix] 增加检查：只有当数据集配置中 birth_age 为 True 时才执行
+        if args_LA['predict_birth_age'] != 'none' and args_C.get('birth_age', False):
             self.predict_cond_value(epoch, epoch_val, cond_key='birth_age')
-        if args_LA['ba_regression']['activate']:
-            self.regress_latent_condition('birth_age', epoch, epoch_val)
+
+        if args_LA['ba_regression']['activate'] and args_C.get('scan_age', False):
+            self.regress_latent_condition('scan_age', epoch, epoch_val)
+        # [Fix] 这里的回归分析也要加同样的检查
+        # if args_LA['ba_regression']['activate'] and args_C.get('birth_age', False):
+        #     self.regress_latent_condition('birth_age', epoch, epoch_val)
 
     def predict_cond_value(self, epoch, epoch_val=0, k=5, cond_key='scan_age'):
         # Predict scan_age using either NCA, PCA, SVR

@@ -101,117 +101,114 @@ class Data(Dataset):
                                                                       modalities[self.modality_keys[-1]])
         
         return modalities
-
     def load_coords_and_values(self, modalities, normalize=True):
-            # 1. 数据增强与加载
-            modalities_data = self.augment_modalities(modalities)
-            mra_data = modalities_data[self.modality_keys[0]]
-            seg_data = modalities_data[self.modality_keys[-1]]
-            affine = modalities[self.modality_keys[-1]].affine
-            img_shape = mra_data.shape
+        """
+        加载坐标和像素值 (通用平衡采样版)
+        策略：
+        1. 前景全采 (或截断至上限)
+        2. 背景 1:1 采样
+        3. 内存复制 (针对小数据量加速)
+        """
+        # 1. 数据增强与加载
+        modalities_data = self.augment_modalities(modalities)
+        # 假设 modality_keys[0] 是 MRA/T1 等灰度图，[-1] 是 Segmentation
+        mra_data = modalities_data[self.modality_keys[0]]
+        seg_data = modalities_data[self.modality_keys[-1]]
+        affine = modalities[self.modality_keys[-1]].affine
+        img_shape = mra_data.shape
 
-            # --------------------------------------------------------------
-            # 2. 前景采样 (Vessel)
-            # --------------------------------------------------------------
-            vessel_indices = np.argwhere(seg_data > 0)
-            n_vessel = len(vessel_indices)
-            
-            # [核心修改 1] 进一步加大背景采样量，让训练更彻底
-            # 提升到 1000万 (10^7)
-            target_n_bg = 10000000 
+        # [可选] 强制清洗背景
+        # 如果你希望模型完全忽略背景的灰度变化(比如头皮/噪声)，取消下面这行的注释
+        # mra_data[seg_data == 0] = 0.0
 
-            # --------------------------------------------------------------
-            # 3. 背景采样 (极速拒绝采样)
-            # --------------------------------------------------------------
-            if n_vessel > 0:
-                fg_mean = np.mean(mra_data[seg_data > 0])
-                air_threshold = fg_mean * 0.1 
-            else:
-                air_threshold = 0.01
+        # ==============================================================
+        # [Step 1] 前景采样 (Foreground)
+        # ==============================================================
+        # 获取所有非零 Label 的坐标 (血管、脑组织等)
+        fg_indices = np.argwhere(seg_data > 0)
+        n_fg = len(fg_indices)
 
-            selected_bg_indices = []
-            
-            # 估算需要的随机点数量 (2倍冗余)
-            n_candidates = target_n_bg * 2
-            rand_coords = np.random.randint(0, [img_shape[0], img_shape[1], img_shape[2]], size=(n_candidates, 3))
-            
-            # 批量获取像素值
-            vals_mra = mra_data[rand_coords[:,0], rand_coords[:,1], rand_coords[:,2]]
-            vals_seg = seg_data[rand_coords[:,0], rand_coords[:,1], rand_coords[:,2]]
-            
-            # 分类筛选
-            is_bg = (vals_seg == 0)
-            mask_tissue = is_bg & (vals_mra > air_threshold)
-            mask_air = is_bg & (vals_mra <= air_threshold)
-            
-            pool_tissue = rand_coords[mask_tissue]
-            pool_air = rand_coords[mask_air]
+        # 设定前景点数量上限 (防止全分辨率大图导致显存溢出)
+        # 200万点通常是 24GB 显存的安全上限，你可以根据硬件调整
+        max_fg_points = 2000000 
+        
+        if n_fg > max_fg_points:
+            # 如果前景太多，随机选一部分
+            idx_fg = np.random.choice(n_fg, max_fg_points, replace=False)
+            fg_indices = fg_indices[idx_fg]
+            n_fg = max_fg_points
 
-            # 执行分层配额
-            if len(pool_tissue) > 0 and len(pool_air) > 0:
-                n_tissue_target = target_n_bg // 2
-                n_air_target = target_n_bg - n_tissue_target
-                
-                if len(pool_tissue) >= n_tissue_target:
-                    selected_bg_indices.append(pool_tissue[:n_tissue_target])
-                else:
-                    selected_bg_indices.append(pool_tissue)
-                    
-                if len(pool_air) >= n_air_target:
-                    selected_bg_indices.append(pool_air[:n_air_target])
-                else:
-                    selected_bg_indices.append(pool_air)
-                    
-            elif len(pool_tissue) > 0:
-                selected_bg_indices.append(pool_tissue[:target_n_bg])
-            elif len(pool_air) > 0:
-                selected_bg_indices.append(pool_air[:target_n_bg])
-                
-            # 保底逻辑
-            if len(selected_bg_indices) == 0:
-                fallback = np.argwhere(seg_data == 0)
-                if len(fallback) > 0:
-                    indices = np.random.choice(len(fallback), min(len(fallback), target_n_bg))
-                    selected_bg_indices.append(fallback[indices])
-            else:
-                selected_bg_indices = np.vstack(selected_bg_indices)
+        # ==============================================================
+        # [Step 2] 背景采样 (Background - 1:1 Balanced)
+        # ==============================================================
+        # 核心逻辑：背景数量永远等于前景数量
+        target_n_bg = n_fg 
 
-            # --------------------------------------------------------------
-            # 4. 合并
-            # --------------------------------------------------------------
-            if len(selected_bg_indices) > 0:
-                c_nz = np.vstack((vessel_indices, selected_bg_indices))
-            else:
-                c_nz = vessel_indices
+        # 随机生成候选点 (比目标多采一些，方便筛选)
+        # 这里乘以 2.0 是经验值，确保能筛出足够的背景点
+        n_candidates = int(target_n_bg * 2.5) + 10000
+        rand_coords = np.random.randint(0, [img_shape[0], img_shape[1], img_shape[2]], 
+                                        size=(n_candidates, 3))
+        
+        # 筛选：只保留 Mask 为 0 的点
+        vals_seg = seg_data[rand_coords[:,0], rand_coords[:,1], rand_coords[:,2]]
+        is_bg = (vals_seg == 0)
+        selected_bg_indices = rand_coords[is_bg]
 
-            # --------------------------------------------------------------
-            # 5. [核心修改 2] 提升截断上限
-            # --------------------------------------------------------------
-            # 必须 >= target_n_bg，否则采了也白采
-            max_points_per_subject = 10000000 
-            
-            if len(c_nz) > max_points_per_subject:
-                perm = np.random.permutation(len(c_nz))
-                c_nz = c_nz[perm[:max_points_per_subject]]
+        # 截断到目标数量
+        if len(selected_bg_indices) > target_n_bg:
+            selected_bg_indices = selected_bg_indices[:target_n_bg]
 
-            # --------------------------------------------------------------
-            # 6. 提取值与坐标计算
-            # --------------------------------------------------------------
-            values = np.stack([modalities_data[mod][c_nz[:, 0], c_nz[:, 1], c_nz[:, 2]].flatten() 
-                                for mod in self.modality_keys], axis=-1)
+        # ==============================================================
+        # [Step 3] 合并数据
+        # ==============================================================
+        if len(selected_bg_indices) > 0:
+            c_nz = np.vstack((fg_indices, selected_bg_indices))
+        else:
+            c_nz = fg_indices
             
-            c_nz_phys = nib.affines.apply_affine(affine, c_nz)
-            img_center_index = np.array(img_shape) / 2.0
-            geometric_center = nib.affines.apply_affine(affine, img_center_index)
+        # ==============================================================
+        # [Step 4] 内存复制优化 (Memory Replication)
+        # ==============================================================
+        # 针对小尺寸图像或稀疏血管的关键优化：
+        # 如果总点数太少(比如<10万)，GPU 瞬间跑完，I/O 成为瓶颈。
+        # 我们强制把数据复制多份，凑够 "target_total_points" (例如 200万)。
+        
+        target_buffer_size = 2000000 # 推荐值：200万 ~ 500万
+        current_points = len(c_nz)
+        
+        if current_points < target_buffer_size and current_points > 0:
+            repeat_factor = target_buffer_size // current_points + 1
+            c_nz = np.tile(c_nz, (repeat_factor, 1))
+            c_nz = c_nz[:target_buffer_size] # 截断对齐
+        
+        # [重要] 必须打乱！否则前半段全是前景，后半段全是背景，BatchNorm 会崩
+        np.random.shuffle(c_nz)
+
+        # ==============================================================
+        # [Step 5] 提取像素值 & 坐标归一化
+        # ==============================================================
+        # 1. 提取像素值
+        values = np.stack([modalities_data[mod][c_nz[:, 0], c_nz[:, 1], c_nz[:, 2]].flatten() 
+                            for mod in self.modality_keys], axis=-1)
+        
+        # 2. 索引 -> 物理坐标
+        c_nz_phys = nib.affines.apply_affine(affine, c_nz)
+        
+        # 3. 计算几何中心 (与生成图谱时的逻辑保持一致)
+        img_center_index = np.array(img_shape) / 2.0
+        geometric_center = nib.affines.apply_affine(affine, img_center_index)
+        
+        # 4. 中心化
+        coords = c_nz_phys - geometric_center
+        
+        # 5. 归一化到 [-1, 1] 范围 (根据 config 中的 world_bbox)
+        if normalize:
+            wb_center = self.world_bbox / 2
+            coords = (coords / wb_center) 
+            values = normalize_intensities(values, self.args['dataset']['normalize_values'])
             
-            coords = c_nz_phys - geometric_center
-            
-            if normalize:
-                wb_center = self.world_bbox / 2
-                coords = (coords / wb_center) 
-                values = normalize_intensities(values, self.args['dataset']['normalize_values'])
-                
-            return coords, values
+        return coords, values
 
     # def load_coords_and_values(self, modalities, normalize=True):
     #     import scipy.ndimage as ndi # 确保引入了这个库
@@ -627,14 +624,24 @@ class Data(Dataset):
         print(f"{indent}[Histogram] {current_cname} bin_edges: {bin_edges.tolist()}")
 
         # Save a bar plot
-        plt.figure()
+        # ------------------- 修改部分开始 -------------------
+        # figsize=(宽, 高)，单位是英寸。
+        # 默认大约是 (6.4, 4.8)。
+        # 如果你想让图变得更长/更宽，可以把第一个数字改大，比如 (12, 6) 或者 (15, 6)
+        plt.figure(figsize=(15, 6)) 
+        # ------------------- 修改部分结束 -------------------
+
         # Midpoints for bar chart
         bin_centers = 0.5 * (bin_edges[:-1] + bin_edges[1:])
         # plot ticks for every bin center, with slight rotation of the labels
         plt.bar(bin_centers, counts, width=(bin_edges[1] - bin_edges[0]) * 0.9)
         plt.xticks(bin_centers, rotation=45)
         # plot every y-tick 
-        plt.yticks(range(0, max(counts)+1))
+        # 注意：如果 counts 非常大（例如几千），range(0, max+1) 会导致 y轴密密麻麻全是字
+        # 建议加个判断，只有最大值较小时才全画出来
+        if max(counts) < 20:
+            plt.yticks(range(0, max(counts)+1))
+        
         plt.title(f"Histogram of {current_cname} with {dist_type} distribution")
         plt.xlabel(current_cname)
         plt.ylabel("Count")

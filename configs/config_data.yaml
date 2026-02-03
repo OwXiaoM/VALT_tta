@@ -130,8 +130,8 @@ marsfet_nnUNet:
 
 mra_atlas: # dhcp neonates multimodal dataset config
   dataset_name: mra_atlas
-  subject_ids: /home/zhangx/CINeMA/vessel_data/IXI/v2/subject_ids.yaml
-  tsv_file: /home/zhangx/CINeMA/vessel_data/IXI/v2/ixi_512_label11_deskull_metadata.tsv
+  subject_ids: /home/zhangx/CINeMA/vessel_data/IXI/v3/subject_ids.yaml
+  tsv_file: /home/zhangx/CINeMA/vessel_data/IXI/v3/ixi_metadata.tsv
   modalities: ['MRA', 'Seg'] # modality names in the tsv file 
   conditions:  # conditions with number of dimensions possibly used for atlas conditioning
     scan_age: true   # 将年龄作为图谱生成的“时间轴”条件
@@ -140,8 +140,8 @@ mra_atlas: # dhcp neonates multimodal dataset config
   constraints:  # sample only subjects that meet all constraints
     scan_age: 
       type: numeric # numeric, categoric, or binary
-      min: 18 # min value to sample 
-      max: 100 # max value to sample
+      min: 19 # min value to sample 
+      max: 87 # max value to sample
       distribution: # distribution of the values to sample, if dropped we sample randomly from the range
         type: 'uniform_fillup' # so far only uniform fillup is supported 
         priority: 10 # higher priority means more important
@@ -150,10 +150,10 @@ mra_atlas: # dhcp neonates multimodal dataset config
       values: ['M', 'F']
 
   label_names: ['Background', 'Vessel','CSF', 'cGM', 'WM', 'BG', 'Ventricles', 'Cerebellum', 'Deep_GM', 'Brainstem', 'HippocampiAmygdala']
-  class_weights: [0.1, 3.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0]
+  class_weights: [0.1, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0]
   # class_weights: [0.00, 2.0, 3.0, 2.0, 1.5, 1.0, 1.0, 1.0, 1.0, 1.0]
   world_bbox: [240, 240, 100] # size of the (roughly) smallest COMMON bounding box for all subjects in mm
-  normalize_values: 'minmax' # 'minmax' or 'zscore'
+  normalize_values: 'none' # 'minmax' or 'zscore'
 
 feta_atlas: # dhcp neonates multimodal dataset config
   dataset_name: feta_atlas

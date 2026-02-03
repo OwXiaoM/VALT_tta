@@ -114,12 +114,12 @@ latent_anaylsis: # to predict scan_age from latentcode or explciit conditions du
 
 # --------- Training Parameters ---------
 n_subjects: # number of subjects to use for training/validation
-  train: 100 #92
-  val: 2 #52
+  train: 541 #92
+  val: 11 #52
 epochs: # number of epochs for training/validation
   train: 1000
   val: 5 # the num epochs for latent code optimization, redone for each validation cycle)
 validate_every: 10
-batch_size: 8 # batch size for training/validation (number of subjects per batch)
+batch_size: 24 # batch size for training/validation (number of subjects per batch)
 n_samples: 100000 # number of coordinates in each "inner_batch" sampled across the subejct batch
-num_workers: 10 # number of workers for dataloader
+num_workers: 16 # number of workers for dataloader
