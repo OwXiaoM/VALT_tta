@@ -89,15 +89,19 @@ class AtlasBuilder:
             conditions = conditions_batch[smpls:smpls + n_smpls] if split == 'train' else self.conditions_val[idx_df]
 
             with torch.autocast(device_type=self.device, enabled=self.args['amp']):
-                values_p = self.inr_decoder[split](coords, self.latents[split], conditions,
+                # [修改 1] 解包返回值，获取预测值 values_p 和辅助损失 aux_loss (MoE load balancing loss)
+                values_p, aux_loss = self.inr_decoder[split](coords, self.latents[split], conditions,
                                             self.transformations[split][idx_df], idcs_df=idx_df)
+                
+                # [修改 2] 将 aux_loss 传递给损失函数
                 loss = self.loss_criterion(values_p, values, self.transformations[split][idx_df], 
+                                           moe_loss=aux_loss,
                                            seg_weight=seg_weight)
 
             if self.args['amp']:    
                 self.grad_scalers[split].scale(loss['total']).backward()
                 
-                # [新增] AMP 模式下的梯度裁剪 (如果你未来开启 AMP)
+                # [AMP 模式下的梯度裁剪] (保留原有注释逻辑)
                 #if split == 'train':
                     #self.grad_scalers[split].unscale_(self.optimizers[split])
                     #torch.nn.utils.clip_grad_norm_(self.inr_decoder[split].parameters(), max_norm=1.0)
@@ -107,8 +111,7 @@ class AtlasBuilder:
             else:
                 loss['total'].backward()
                 
-                # [新增] 普通模式下的梯度裁剪 (这是你现在的关键代码)
-                # 只有在 'train' 阶段才裁剪主网络的梯度，防止脏数据炸毁模型
+                # [普通模式下的梯度裁剪] (保留原有注释逻辑)
                 #if split == 'train':
                     #torch.nn.utils.clip_grad_norm_(self.inr_decoder[split].parameters(), max_norm=1.0)
                 
@@ -122,7 +125,7 @@ class AtlasBuilder:
                       f"Progress: {i/len(sample_iterator):.2f},"
                       f"Loss: {np.mean(loss_hist_samples):.4f},")
         return np.mean(loss_hist_samples)
-  
+        
     def validate(self, epoch_train):
         """
         Validate the model on the validation set.

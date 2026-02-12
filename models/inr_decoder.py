@@ -17,9 +17,28 @@ class INR_Decoder(nn.Module):
         self.out_dim = sum(args_inr['out_dim'])
         self.mod_dim = args_inr['hidden_size'] * len(args_inr['modulated_layers']) * 2
         self.modulator = Modulator(args_inr['latent_dim'], kernel_size=args_inr['cnn_kernel_size'])
-        self.sr_net = Siren(args_inr['in_dim'], args_inr['latent_dim'][0] + args_inr['cond_dims'], self.out_dim, args_inr['hidden_size'],
-                            args_inr['num_hidden_layers'], f_om=args_inr['omega'][0], h_om=args_inr['omega'][1],
-                            outermost_linear=True, modulated_layers=args_inr['modulated_layers'])
+        
+        # [新增] 获取 MoE 相关配置，默认为 False/默认值以保持兼容性
+        use_moe = args_inr.get('use_moe', False)
+        num_experts = args_inr.get('num_experts', 4)
+        moe_k = args_inr.get('moe_k', 2)
+
+        # [修改] 将 MoE 参数传递给 Siren
+        self.sr_net = Siren(
+            in_size=args_inr['in_dim'], 
+            lat_size=args_inr['latent_dim'][0] + args_inr['cond_dims'], 
+            out_size=self.out_dim, 
+            hidden_size=args_inr['hidden_size'],
+            num_layers=args_inr['num_hidden_layers'], 
+            f_om=args_inr['omega'][0], 
+            h_om=args_inr['omega'][1],
+            outermost_linear=True, 
+            modulated_layers=args_inr['modulated_layers'],
+            # 新增参数
+            use_moe=use_moe,
+            num_experts=num_experts,
+            moe_k=moe_k
+        )
 
     def forward(self, coords, latent_vecs, condition_vecs, tfs=None, idcs_df=None):
         """
@@ -28,12 +47,22 @@ class INR_Decoder(nn.Module):
             latent_vecs: (N, l_channels, l_x, l_y, l_z)
             condition_vecs: (N, c_channels)
             tfs: (N, 6)
+        Returns:
+            output: (N, out_dim)
+            aux_loss: scalar tensor (MoE load balancing loss)
         """
         coords = self.transform(coords, tfs) if tfs is not None else coords
         modulations = self.modulator(latent_vecs)[idcs_df]
         modulations_interp = self.spatial_interpolation(coords, modulations, condition_vecs)
+        
+        # 执行前向传播
         output = self.sr_net((coords, modulations_interp))
-        return output
+        
+        # [新增] 获取 MoE 的辅助损失 (Load Balancing Loss)
+        # 即使 use_moe=False，Siren.get_moe_loss 也应设计为返回 0
+        aux_loss = self.sr_net.get_moe_loss()
+        
+        return output, aux_loss
 
     def inference(self, coords, latent_vec, condition_vec, img_shape, tfs=None, step_size=100000):
         """
@@ -49,17 +78,20 @@ class INR_Decoder(nn.Module):
         for i in range(0, coords.shape[0], step_size):
             c = coords[i:i+step_size]
             
-            # [关键修改] 确保索引在 GPU 上，避免 Device Mismatch 错误
+            # 确保索引在 GPU 上
             idcs_df = torch.zeros(c.shape[0], dtype=torch.long, device=self.device)
             
             cv = condition_vec.expand(c.shape[0], -1)
-            output[i:i + step_size] = self.forward(c, latent_vec, cv, idcs_df=idcs_df)
+            
+            # [修改] forward 现在返回 (output, aux_loss)，我们只需要 output
+            # 这里的 aux_loss 在推理阶段通常会被忽略
+            batch_out, _ = self.forward(c, latent_vec, cv, idcs_df=idcs_df)
+            
+            output[i:i + step_size] = batch_out
 
         raw_imgs = output[..., :self.sr_dims]
         
-        # 4. 归一化逻辑修复
-        # 以前的 Min-Max 会导致背景噪声被拉伸成全白。
-        # 对于 MRA，背景应该是 0，所以直接截断 (Clamp) 到 [0, 1] 是最正确的做法。
+        # 4. 归一化逻辑 (针对 MRA 等稀疏数据优化)
         imgs = torch.clamp(raw_imgs, 0, 1)
         
         # 5. Reshape

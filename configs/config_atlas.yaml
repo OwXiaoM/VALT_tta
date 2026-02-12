@@ -55,6 +55,7 @@ data_augmentation:
 
 # --------- Optimizer Parameters ---------
 optimizer:
+  moe_weight: 0.01
   re_init_latents: False # if True, re-initialize latent codes from gaussian distribution after each epoch
   lr_inr: 1.0e-4
   inr_weight_decay: 0.0
@@ -81,6 +82,9 @@ inr_decoder:
   num_hidden_layers: 5 # number of hidden layers of the MLP
   modulated_layers: [1, 3, 5] # layers that are modulated by the latent code
   omega: [30, 30] # first and hidden omega of SIREN
+  use_moe: True      # 开启 MoE
+  num_experts: 4     # 专家数量
+  moe_k: 2
 
 
 # --------- Atlas Generation Parameters ---------

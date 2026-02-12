@@ -79,16 +79,21 @@ class Criterion(nn.Module):
         super().__init__()
         self.args = args
         self.tf_weight = args['optimizer']['tf_weight']
-        self.n_classes = args['inr_decoder']['out_dim'][-1]-1  # number of classes for segmentation excluding background
+        # [新增] 读取 MoE loss 权重，默认 0.1
+        self.moe_weight = args['optimizer'].get('moe_weight', 0.1) 
+        
+        self.n_classes = args['inr_decoder']['out_dim'][-1]-1
         self.sr_dims = sum(args['inr_decoder']['out_dim'][:-1])
         self.criterion_sr = nn.MSELoss() if args['optimizer']['loss_metric'] == 'mse' else nn.L1Loss()
         self.ce_weights = torch.tensor(args['dataset']['class_weights'], dtype=torch.float32, device=args['device']) if args['dataset']['class_weights'] is not None else None
         self.criterion_seg = nn.CrossEntropyLoss(weight=self.ce_weights)
 
-    def forward(self, output, target, tfs, sr_weight=1.0, seg_weight=1.0):
+    # [修改] 增加 moe_loss 参数
+    def forward(self, output, target, tfs, moe_loss=None, sr_weight=1.0, seg_weight=1.0):
         loss = {'seg': torch.tensor(0.0), 
                 'sr': sr_weight * self.criterion_sr(output[..., :self.sr_dims], target[..., :self.sr_dims]),
                 'trafo': torch.tensor(0.0), 
+                'moe': torch.tensor(0.0), # 初始化
                 'total': 0.0}
 
         if seg_weight > 0:
@@ -99,8 +104,12 @@ class Criterion(nn.Module):
             loss['tf_trans'] = torch.mean(tfs[..., 3:6] ** 2)
             loss['tf_scale'] = torch.mean(tfs[..., 6:9] ** 2) if tfs.shape[-1] == 9 else torch.tensor(0.0)
             loss['tf'] = loss['tf_rot'] + loss['tf_trans'] + loss['tf_scale']
+        
+        # [新增] 处理 MoE 损失
+        if moe_loss is not None and self.moe_weight > 0:
+            loss['moe'] = self.moe_weight * moe_loss
 
-        loss['total'] = loss['sr'] + seg_weight * loss['seg'] + self.tf_weight * loss['tf']
+        loss['total'] = loss['sr'] + seg_weight * loss['seg'] + self.tf_weight * loss['tf'] + loss['moe']
         return loss
 
 
@@ -860,6 +869,7 @@ def log_loss(loss, epoch, split, log=True):
         wd.log({f"{split}/loss": loss['total'].item()})
         wd.log({f"{split}/loss_sr": loss['sr'].item()})
         wd.log({f"{split}/loss_seg": loss['seg'].item()})
+        wd.log({f"{split}/loss_moe": loss['moe'].item()})
         wd.log({f"{split}/loss_tf_rot": loss['tf_rot'].item()})
         wd.log({f"{split}/loss_tf_trans": loss['tf_trans'].item()})
         wd.log({f"{split}/loss_tf_scale": loss['tf_scale'].item()})
