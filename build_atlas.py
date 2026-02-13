@@ -34,8 +34,8 @@ class AtlasBuilder:
 
     def train_on_data(self):
         # 如果加载了预训练模型，先验证一次（这一行保持不变）
-        if len(self.args['load_model']['path']) > 0: 
-            self.validate(epoch_train=0) 
+        # if len(self.args['load_model']['path']) > 0: 
+        #     self.validate(epoch_train=0) 
             
         loss_hist_epochs = []
         start_time = time.time()
@@ -149,19 +149,19 @@ class AtlasBuilder:
         log_metrics(self.args, metrics_train, epoch_train, df=self.datasets['train'].df, split='train')
 
         # Evaluate reconstruction quality on validation subjects
-        self._init_validation() 
+        # self._init_validation() 
         
-        # Validation Optimization Loop (Test-time Optimization)
-        for epoch_val in range(self.args['epochs']['val']):
-            self.train_epoch(epoch=epoch_val, split='val') 
-            self._update_scheduler(split='val') 
-            self.analyze_latent_space(epoch_train, epoch_val=epoch_val)
+        # # Validation Optimization Loop (Test-time Optimization)
+        # for epoch_val in range(self.args['epochs']['val']):
+        #     self.train_epoch(epoch=epoch_val, split='val') 
+        #     self._update_scheduler(split='val') 
+        #     self.analyze_latent_space(epoch_train, epoch_val=epoch_val)
             
-        metrics_val = self.generate_subjects_from_df(idcs_df=range(len(self.datasets['val'])), 
-                                                    epoch=epoch_val, split='val')
-        log_metrics(self.args, metrics_val, epoch_train, df=self.datasets['val'].df, split='val')
+        # metrics_val = self.generate_subjects_from_df(idcs_df=range(len(self.datasets['val'])), 
+        #                                             epoch=epoch_val, split='val')
+        # log_metrics(self.args, metrics_val, epoch_train, df=self.datasets['val'].df, split='val')
         
-        self.save_state(epoch_train)
+        # self.save_state(epoch_train)
 
     def generate_subject_from_latent(self, latent_vec, condition_vector, transformation=None, split='train'):
         """
