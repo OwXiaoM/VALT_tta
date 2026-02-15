@@ -130,6 +130,7 @@ class AtlasBuilder:
         """
         Validate the model on the validation set.
         """
+        self.save_state(epoch_train)
         # 1. 生成 Atlas (保持不变)
         if self.args['generate_cond_atlas']: 
             self.generate_atlas(epoch_train, n_max=100)

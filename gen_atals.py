@@ -17,12 +17,18 @@ def load_config(config_path, data_config_path):
         config = yaml.safe_load(stream)
     with open(data_config_path, 'r') as stream:
         data_config_full = yaml.safe_load(stream)
+        # Use the config_data name from the atlas config, or default to the first one
         dataset_name = config.get('config_data', 'mra_atlas')
+        # Check if the specific dataset config exists
         if dataset_name not in data_config_full:
              dataset_name = list(data_config_full.keys())[0]
         config['dataset'] = data_config_full[dataset_name]
     
+    # Handle subject_ids loading
     if isinstance(config['dataset']['subject_ids'], str):
+        # Determine the base path for subject_ids.yaml relative to data_config_path if needed, 
+        # or just use the path as is if it's absolute. 
+        # Here we assume the path in yaml is correct or absolute.
         with open(config['dataset']['subject_ids'], 'r') as stream:
             ids = yaml.safe_load(stream)
             if config['dataset']['dataset_name'] in ids:
@@ -34,6 +40,7 @@ def load_config(config_path, data_config_path):
 
 def get_mean_latent(args, target_age, latents, dataset, device, gaussian_span=5.0):
     cond_key = 'scan_age'
+    # This now uses the dataframe from the checkpoint, so sizes will match
     condition_values, _ = dataset.get_condition_values(cond_key, normed=True, device=device)
     
     target_age_norm = normalize_condition(args, cond_key, target_age)
@@ -50,8 +57,14 @@ def get_mean_latent(args, target_age, latents, dataset, device, gaussian_span=5.
     
     diff = condition_values - target_age_norm
     weights = torch.exp(-(diff)**2 / (2 * (sigma**2)))
+    
+    # Avoid division by zero if weights are too small
+    if torch.sum(weights) == 0:
+        weights = torch.ones_like(weights)
+        
     weights = weights / torch.sum(weights)
     
+    # Expand weights dimensions to match latents (N, C, X, Y, Z)
     for _ in range(len(latents.shape) - 1):
         weights = weights.unsqueeze(-1)
         
@@ -59,55 +72,59 @@ def get_mean_latent(args, target_age, latents, dataset, device, gaussian_span=5.
     return mean_latent, target_age_norm
 
 def main():
-    # ================= 配置区域 =================
+    # ================= Configuration =================
     checkpoint_path = "/home/zhangx/Cinema_moe/tmp/mra_atlas_20260211_210406_loc/checkpoint_epoch_12.pth"
     config_atlas_path = "/home/zhangx/Cinema_moe/tmp/mra_atlas_20260211_210406_loc/config_atlas.yaml"
-    config_data_path = "/home/zhangx/CINeMA/tmp/mra_atlas_20260130_134905_loc/config_data.yaml"
+    config_data_path = "/home/zhangx/Cinema_moe/tmp/mra_atlas_20260211_210406_loc/config_data.yaml"
     target_ages = [20, 30, 40, 50, 60, 70, 80]
-    output_dir = "/home/zhangx/CINeMA/tmp/mra_atlas_20260130_134905_loc/vessel_atlas"
-    # ===========================================
+    output_dir = "/home/zhangx/Cinema_moe/tmp/mra_atlas_20260211_210406_loc/vessel_atlas"
+    # ===============================================
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     print(f"Using device: {device}")
 
-    # 1. 准备输出目录
     os.makedirs(output_dir, exist_ok=True)
     print(f"Output directory created: {output_dir}")
 
-    # 2. 加载配置
     print("Loading configuration...")
     config = load_config(config_atlas_path, config_data_path)
-    config['output_dir'] = output_dir # 修复直方图保存路径
+    config['output_dir'] = output_dir 
 
-    # 3. 初始化数据集
-    print("Initializing dataset...")
-    config['batch_size'] = 1 
+    # --- KEY FIX START ---
+    # 1. Load Checkpoint FIRST
+    print(f"Loading checkpoint: {checkpoint_path}")
+    checkpoint = torch.load(checkpoint_path, map_location=device, weights_only=False)
     
-    tsv_path = config['dataset']['tsv_file']
-    print(f"Reading TSV file: {tsv_path}")
-    df = pd.read_csv(tsv_path, sep='\t')
+    # 2. Extract the Dataframe used during training
+    # This ensures we have the exact same 200 subjects in the exact same order
+    if 'dataset_df' not in checkpoint:
+        raise ValueError("Checkpoint does not contain 'dataset_df'. Cannot restore exact training state.")
     
-    dataset = Data(config, df, split='train')
+    saved_df = checkpoint['dataset_df']
+    print(f"Restored dataframe from checkpoint with {len(saved_df)} subjects.")
+
+    # 3. Initialize Dataset using the Loaded Dataframe
+    # We pass None for tsv_file because we are providing df_loaded
+    dataset = Data(config, tsv_file=None, split='train', df_loaded=saved_df)
+    # --- KEY FIX END ---
     
-    # 4. 初始化模型
+    # Initialize Model
     print("Initializing INR Decoder...")
     config['inr_decoder']['cond_dims'] = sum([config['dataset']['conditions'][c] for c in config['dataset']['conditions']])
     model = INR_Decoder(config, device).to(device)
     model.eval()
 
-    # 5. 加载权重 [关键修复点]
-    print(f"Loading checkpoint: {checkpoint_path}")
-    # 添加 weights_only=False 以允许加载 Pandas DataFrame 等复杂对象
-    checkpoint = torch.load(checkpoint_path, map_location=device, weights_only=False)
-    
+    # Load Model Weights and Latents
     model.load_state_dict(checkpoint['inr_decoder'])
     train_latents = checkpoint['latents'].to(device)
     print(f"Loaded {len(train_latents)} subject latents.")
 
-    # 6. 准备网格
+    # Verify dimensions match
+    if len(train_latents) != len(dataset):
+        raise RuntimeError(f"Mismatch: Latents ({len(train_latents)}) vs Dataset ({len(dataset)})")
+
     grid_coords, grid_shape, affine = generate_world_grid(config, device=device)
     
-    # 7. 生成循环
     vessel_label_idx = 1
     if 'Vessel' in config['dataset']['label_names']:
         vessel_label_idx = config['dataset']['label_names'].index('Vessel')
@@ -146,8 +163,18 @@ def main():
                 )
                 
                 sr_dims = sum(config['inr_decoder']['out_dim'][:-1])
+                # Check output dimensions logic
+                # out_dim usually is [modalities, segmentation_classes]
+                # model.inference returns [..., modalities + seg_hard + seg_soft]
+                # For MRA + Seg (2 classes), out_dim=[1, 2]. sr_dims=1.
+                # Inference returns: [MRA, Seg_Hard, Seg_Soft_BG, Seg_Soft_Vessel]
+                # Indices:           0    1         2            3
+                
+                # soft_start_idx calculation:
+                # sr_dims (1) + 1 (seg_hard) = 2. 
+                # soft channels start at index 2.
                 soft_start_idx = sr_dims + 1 
-                target_channel_idx = soft_start_idx + vessel_label_idx
+                target_channel_idx = soft_start_idx + vessel_label_idx # 2 + 1 = 3
                 
                 vessel_prob_map = output_volume[..., target_channel_idx].cpu().numpy()
                 
